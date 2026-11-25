@@ -103,20 +103,33 @@ select, input[type="search"] {
 .stat-label { font-size: 0.78rem; color: var(--ink-soft); }
 .stat-value { font-size: 1.35rem; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .stat-note { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
-.stat.primary { grid-column: 1 / -1; background: var(--accent-soft); }
-.stat.primary .stat-value { font-size: 1.8rem; color: var(--accent); }
+/* breakdown: home, same SA4, same state, other states. Every bar is
+   on one scale -- full width is all of the SA2's children. */
+.breakdown { display: grid; gap: 14px; margin-top: 14px; }
+.scope h4 { margin: 0 0 4px; font-size: 1rem; color: var(--accent); }
+.scope.home h4 { color: var(--ink); }
+.tag { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; vertical-align: 2px; }
+.scope-row { display: grid; grid-template-columns: 1fr 58px; align-items: center; gap: 8px; }
+.scope-row strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; text-align: right; }
+.scope-note { margin: 3px 0 0; font-size: 0.78rem; color: var(--muted); }
+.share-bar { display: block; height: 16px; background: var(--page); border-radius: 2px; overflow: hidden; }
+.share-bar > span { display: block; height: 100%; background: var(--accent); }
+.scope.home .share-bar > span { background: #d94801; }
 
-.links { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.links button {
-  width: 100%; display: grid; grid-template-columns: 24px 1fr auto auto; align-items: center; gap: 10px;
-  border: 1px solid var(--line); border-radius: var(--radius); text-align: left; padding: 7px 10px;
+/* a list row: bar on the scope bars' scale, the text straight after */
+.area-list summary { cursor: pointer; font-size: 0.82rem; font-style: italic; color: var(--ink-soft); margin-top: 4px; }
+.area-list[open] .when-closed, .area-list:not([open]) .when-open { display: none; }
+.area-list ol { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 1px; }
+.area-list button, .area-other {
+  width: 100%; display: flex; align-items: center; gap: 6px;
+  border: 0; border-radius: 4px; background: none; text-align: left; padding: 2px 0; font-size: 0.84rem;
 }
-.links button:hover { background: var(--link-soft); }
-.rank { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 0.78rem; font-weight: 700; }
-.link-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.link-name small { display: block; color: var(--muted); font-size: 0.75rem; }
-.link-share, .link-km { font-variant-numeric: tabular-nums; font-size: 0.9rem; }
-.link-km { color: var(--ink-soft); min-width: 58px; text-align: right; }
+.area-list button:hover { background: var(--link-soft); }
+.area-bar { flex: none; height: 5px; min-width: 2px; background: var(--accent); }
+.area-bar.muted-bar { background: #a9b4c4; }
+.area-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.area-note { color: var(--muted); font-size: 0.78rem; font-style: italic; font-variant-numeric: tabular-nums; }
+.area-other { color: var(--ink-soft); font-style: italic; }
 
 .flip { width: 100%; margin-top: 14px; border: 1px solid var(--accent); color: var(--accent); border-radius: var(--radius); }
 .flip:hover { background: var(--accent-soft); }
@@ -153,11 +166,7 @@ select, input[type="search"] {
   font: 600 11px/1 system-ui, sans-serif; color: #1b2230; letter-spacing: 0.02em;
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
 }
-.rank-marker span {
-  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
-  background: var(--link); color: #fff; font: 700 12px/1 system-ui, sans-serif;
-  border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-}
+.swatch-selected { background: #fff; border: 2.5px solid #1b2230; }
 .leaflet-tooltip { font: 0.82rem/1.35 system-ui, sans-serif; }
 .leaflet-tooltip strong { font-weight: 650; }
 

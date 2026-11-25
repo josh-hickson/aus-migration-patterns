@@ -1,8 +1,15 @@
 // Where young Australians move: SA2 migration map.
 //
 // Reads the files stage 04 writes to data/ and draws them. Every
-// number shown comes from the release tables; the page computes
-// only map shading breaks and the approximate 95% interval on rates.
+// number shown comes from the release tables; the page computes only
+// map shading breaks, the approximate 95% interval on rates, which
+// scope (same SA4, same state, other state) each link falls in, and
+// each scope's "other places" remainder.
+//
+// Two map modes. With nothing selected, each SA2 is shaded by its own
+// statistic. With an SA2 selected, every SA2 is reshaded by that
+// SA2's links: the share of its children who went there ("from") or
+// of its 26-year-olds who came from there ("to").
 'use strict';
 
 // -- settings ----
@@ -18,7 +25,19 @@ const GROUPS = [
 const GROUP_BY_ID = Object.fromEntries(GROUPS.map((group) => [group.id, group]));
 
 // Position of each statistic in a summary.json row.
-const SUMMARY_POSITION = { n: 0, rate: 1, mean: 2, median: 3 };
+const SUMMARY_POSITION = {
+  n: 0, rate: 1, mean: 2, median: 3,
+  same_sa2: 4, same_sa4: 5, same_state: 6, other_state: 7,
+};
+
+// The moving scopes, nested: each excludes the one before it.
+const MOVING_SCOPES = ['same_sa4', 'same_state', 'other_state'];
+
+const STATE_ABBREVIATIONS = {
+  'New South Wales': 'NSW', Victoria: 'Vic.', Queensland: 'Qld', 'South Australia': 'SA',
+  'Western Australia': 'WA', Tasmania: 'Tas.', 'Northern Territory': 'NT',
+  'Australian Capital Territory': 'ACT', 'Other Territories': 'Other Terr.',
+};
 
 const MEASURES = {
   from: [
@@ -33,14 +52,18 @@ const MEASURES = {
   ],
 };
 
-// Sequential blues for the map (ColorBrewer Blues, 7 classes); a
-// separate orange ramp marks the linked SA2s, rank 1 darkest.
-// Blue against orange stays distinct under the common colour-vision
-// deficiencies.
+// Sequential blues for SA2 statistics (ColorBrewer Blues, 7 classes)
+// and oranges for a selected SA2's links (ColorBrewer Oranges), so
+// the two modes cannot be mistaken for each other; both are
+// single-hue and read under the common colour-vision deficiencies.
 const PALETTE = ['#eff3ff', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#084594'];
 const NO_DATA_COLOUR = '#d9dce1';
-const LINK_COLOURS = ['#9a3412', '#c2410c', '#ea580c', '#f97316', '#fb923c'];
-const SELECTED_COLOUR = '#1b2230';
+const FLOW_PALETTE = ['#feedde', '#fdd0a2', '#fdae6b', '#fd8d3c', '#f16913', '#d94801', '#8c2d04'];
+// Fixed, doubling breaks for link shares, so one SA2's map can be
+// compared with another's; quantiles would rescale every click.
+const FLOW_BREAKS = [0.005, 0.01, 0.02, 0.04, 0.08, 0.16];
+const NO_LINK_COLOUR = '#eceef2';
+const SELECTED_OUTLINE = '#1b2230';
 
 // SA2s offered as starting points, if they exist in the lookup.
 const EXAMPLE_NAMES = ['Mount Isa', 'Broken Hill', 'Dubbo', 'Alice Springs', 'Burnie - Wivenhoe', 'Mildura'];
@@ -58,12 +81,19 @@ const CITY_LABELS = [
 
 // -- state ----
 const state = { dir: 'from', group: 'all', measure: 'rate', sa2: null };
-let meta, lookupByCode, summary, map, sa2Layer, linkOverlay, legendControl;
+let meta, lookupByCode, summary, map, sa2Layer, legendControl;
 const layerByCode = new Map();
 const linkCache = new Map();
+// Every published link of the selected SA2, largest first, and the
+// same indexed by the other SA2's code.
 let currentLinks = [];
-let linkRankByCode = new Map();
+let linkByCode = new Map();
 let breaks = { thresholds: [], min: undefined, max: undefined };
+// SA4s per state: where one SA4 is the whole state (the ACT), the
+// "elsewhere in the state" scope cannot hold anyone and is not shown.
+const sa4CountByState = new Map();
+// Breakdown lists the visitor has folded away, kept across selections.
+const foldedScopes = new Set();
 
 // -- formatting ----
 const numberFormat = new Intl.NumberFormat('en-AU');
@@ -126,27 +156,45 @@ function colourFor(value) {
   return PALETTE[index];
 }
 
+function flowColourFor(share) {
+  if (share === null || share === undefined) return NO_LINK_COLOUR;
+  let index = 0;
+  while (index < FLOW_BREAKS.length && share >= FLOW_BREAKS[index]) index += 1;
+  return FLOW_PALETTE[index];
+}
+
 function styleFor(code) {
-  const style = { fillColor: colourFor(statistic(code)), fillOpacity: 0.82, color: '#ffffff', weight: 0.35, opacity: 0.9 };
-  if (!state.sa2) return style;
-  style.fillOpacity = 0.32;
-  const rank = linkRankByCode.get(code);
-  if (rank) Object.assign(style, { fillColor: LINK_COLOURS[rank - 1], fillOpacity: 0.92, color: '#7c2d12', weight: 1 });
-  if (code === state.sa2) Object.assign(style, { fillColor: SELECTED_COLOUR, fillOpacity: 0.6, color: SELECTED_COLOUR, weight: 2.5 });
-  return style;
+  const base = { fillOpacity: 0.82, color: '#ffffff', weight: 0.35, opacity: 0.9 };
+  if (!state.sa2) return { ...base, fillColor: colourFor(statistic(code)) };
+  // The selected SA2 is shaded by its own share (stayers, or
+  // 26-year-olds who also grew up there) and outlined.
+  if (code === state.sa2) {
+    return { fillColor: flowColourFor(statistic(code, 'same_sa2')), fillOpacity: 0.95, color: SELECTED_OUTLINE, weight: 3, opacity: 1 };
+  }
+  const link = linkByCode.get(code);
+  return { ...base, fillColor: flowColourFor(link ? link[2] : null), fillOpacity: link ? 0.92 : 0.85 };
 }
 
 function restyleMap() {
   sa2Layer.eachLayer((layer) => layer.setStyle(styleFor(layer.feature.properties.sa2_code)));
-  // Linked and selected SA2s drawn last, so their outlines are not
-  // painted over by neighbours.
-  linkRankByCode.forEach((_, code) => layerByCode.get(code)?.bringToFront());
+  // The selected SA2 is drawn last, so neighbours do not paint over
+  // its outline.
   if (state.sa2) layerByCode.get(state.sa2)?.bringToFront();
+}
+
+// The ACT's one SA4 shares the territory's name; say it once.
+function regionLine(place) {
+  return place.sa4 === place.state ? escapeHtml(place.state) : `${escapeHtml(place.sa4)} · ${escapeHtml(place.state)}`;
+}
+
+function placeLine(place) {
+  return `<strong>${escapeHtml(place.name)}</strong><br><span class="muted">${regionLine(place)}</span>`;
 }
 
 function tooltipFor(layer) {
   const code = layer.feature.properties.sa2_code;
   const place = lookupByCode.get(code);
+  if (state.sa2) return `${placeLine(place)}<br>${selectionTooltipLine(code)}`;
   const measure = measureFor();
   const row = summaryRow(code);
   const value = statistic(code);
@@ -154,18 +202,35 @@ function tooltipFor(layer) {
   if (!row) valueLine = '<span class="muted">No children in the data</span>';
   else if (value === null) valueLine = `<span class="muted">Suppressed: fewer than ${meta.min_base_count} children</span>`;
   else valueLine = `${escapeHtml(measure.label)}: <strong>${formatValue(measure.kind, value)}</strong>`;
-  const rank = linkRankByCode.get(code);
-  let linkLine = '';
-  if (rank) {
-    const link = currentLinks[rank - 1];
-    const what = state.dir === 'from' ? 'destination' : 'origin';
-    linkLine = `<br>#${rank} ${what}: <strong>${formatShare(link[2])}</strong> of ${state.dir === 'from' ? 'children from' : '26-year-olds in'} ${escapeHtml(lookupByCode.get(state.sa2).name)}`;
+  return `${placeLine(place)}<br>${valueLine}`;
+}
+
+// What the hovered SA2 is to the selected one.
+function selectionTooltipLine(code) {
+  const selectedName = escapeHtml(lookupByCode.get(state.sa2).name);
+  const from = state.dir === 'from';
+  if (code === state.sa2) {
+    const share = statistic(code, 'same_sa2');
+    if (share === null) return '<span class="muted">Selected</span>';
+    return `Selected · <strong>${formatShare(share)}</strong> ${from ? `still here at ${meta.destination_age}` : `also grew up here`}`;
   }
-  return `<strong>${escapeHtml(place.name)}</strong><br><span class="muted">${escapeHtml(place.state)}</span><br>${valueLine}${linkLine}`;
+  const link = linkByCode.get(code);
+  if (!link) {
+    return `<span class="muted">${from ? `Fewer than ${meta.min_link_count} children from ${selectedName} live here at ${meta.destination_age}, or none`
+      : `Fewer than ${meta.min_link_count} of ${selectedName}'s ${meta.destination_age}-year-olds grew up here, or none`}</span>`;
+  }
+  return from
+    ? `<strong>${formatShare(link[2])}</strong> of children from ${selectedName} live here at ${meta.destination_age} · ${formatKm(link[3])} away`
+    : `<strong>${formatShare(link[2])}</strong> of ${selectedName}'s ${meta.destination_age}-year-olds grew up here · ${formatKm(link[3])} away`;
 }
 
 // -- legend ----
 function renderLegend() {
+  const group = `<span class="muted">${escapeHtml(GROUP_BY_ID[state.group].name)}</span>`;
+  if (state.sa2) {
+    renderSelectionLegend(group);
+    return;
+  }
   const measure = measureFor();
   const rows = PALETTE.map((colour, index) => {
     const low = index === 0 ? breaks.min : breaks.thresholds[index - 1];
@@ -173,63 +238,45 @@ function renderLegend() {
     if (low === undefined || high === undefined) return '';
     return `<div class="legend-row"><span class="swatch" style="background:${colour}"></span>${formatValue(measure.kind, low)} – ${formatValue(measure.kind, high)}</div>`;
   }).join('');
-  let linkRows = '';
-  if (state.sa2 && currentLinks.length) {
-    const what = state.dir === 'from' ? 'destinations' : 'origins';
-    linkRows = `<div class="legend-sep"></div><div class="legend-row"><span class="swatch" style="background:${SELECTED_COLOUR}"></span>Selected SA2</div>`
-      + `<div class="legend-row"><span class="swatch" style="background:${LINK_COLOURS[0]}"></span>Top ${what}, 1 to ${currentLinks.length}</div>`;
-  }
-  legendControl.getContainer().innerHTML = `<div class="legend-title">${escapeHtml(fill(measure.legend))}<br><span class="muted">${escapeHtml(GROUP_BY_ID[state.group].name)}</span></div>${rows}`
-    + `<div class="legend-row"><span class="swatch" style="background:${NO_DATA_COLOUR}"></span>Suppressed or none</div>${linkRows}`;
+  legendControl.getContainer().innerHTML = `<div class="legend-title">${escapeHtml(fill(measure.legend))}<br>${group}</div>${rows}`
+    + `<div class="legend-row"><span class="swatch" style="background:${NO_DATA_COLOUR}"></span>Suppressed or none</div>`;
 }
 
-// -- links on the map ----
-// A gentle arc from origin to destination: a quadratic Bezier whose
-// control point sits off the midpoint, perpendicular to the chord.
-function arcPoints(fromLatLng, toLatLng) {
-  const [lat1, lon1] = fromLatLng;
-  const [lat2, lon2] = toLatLng;
-  const midLat = (lat1 + lat2) / 2;
-  const midLon = (lon1 + lon2) / 2;
-  const controlLat = midLat + (lon2 - lon1) * 0.18;
-  const controlLon = midLon - (lat2 - lat1) * 0.18;
-  const points = [];
-  for (let step = 0; step <= 32; step += 1) {
-    const t = step / 32;
-    const a = (1 - t) * (1 - t);
-    const b = 2 * (1 - t) * t;
-    const c = t * t;
-    points.push([a * lat1 + b * controlLat + c * lat2, a * lon1 + b * controlLon + c * lon2]);
-  }
-  return points;
+function renderSelectionLegend(group) {
+  const name = escapeHtml(lookupByCode.get(state.sa2).name);
+  const title = state.dir === 'from'
+    ? `Where children from ${name} lived at ${meta.destination_age}`
+    : `Where ${name}'s ${meta.destination_age}-year-olds grew up`;
+  const formatBreak = (value) => `${+(value * 100).toFixed(1)}%`;
+  const rows = FLOW_PALETTE.map((colour, index) => {
+    const label = index === 0 ? `under ${formatBreak(FLOW_BREAKS[0])}`
+      : index === FLOW_PALETTE.length - 1 ? `${formatBreak(FLOW_BREAKS[index - 1])} or more`
+        : `${formatBreak(FLOW_BREAKS[index - 1])} – ${formatBreak(FLOW_BREAKS[index])}`;
+    return `<div class="legend-row"><span class="swatch" style="background:${colour}"></span>${label}</div>`;
+  }).reverse().join('');
+  legendControl.getContainer().innerHTML = `<div class="legend-title">${title}<br>${group}</div>${rows}`
+    + `<div class="legend-row"><span class="swatch" style="background:${NO_LINK_COLOUR}"></span>Fewer than ${meta.min_link_count}, or none</div>`
+    + `<div class="legend-row"><span class="swatch swatch-selected"></span>${name}</div>`;
 }
 
-function drawLinks() {
-  linkOverlay.clearLayers();
-  if (!state.sa2) return;
+// Frame the selection and its largest links (only the largest few:
+// the full list can span the country). Move when they are off
+// screen, or when they fill under a tenth of the view's width and
+// height -- at national scale a city SA2 and its neighbours are
+// specks, and their shading cannot be seen.
+function fitSelection({ animate = true } = {}) {
   const here = lookupByCode.get(state.sa2);
-  currentLinks.forEach((link, index) => {
-    const other = lookupByCode.get(link[0]);
-    const hereLatLng = [here.lat, here.lon];
-    const otherLatLng = [other.lat, other.lon];
-    const points = state.dir === 'from' ? arcPoints(hereLatLng, otherLatLng) : arcPoints(otherLatLng, hereLatLng);
-    L.polyline(points, { color: '#7c2d12', weight: 1.5 + 10 * Math.min(link[2], 0.3), opacity: 0.75, interactive: false }).addTo(linkOverlay);
-    L.marker(otherLatLng, {
-      icon: L.divIcon({ className: 'rank-marker', html: `<span>${index + 1}</span>`, iconSize: [22, 22] }),
-      keyboard: false, interactive: false,
-    }).addTo(linkOverlay);
-  });
-}
-
-// Move the view only when the selection or its links are off screen.
-function fitSelection() {
-  const here = lookupByCode.get(state.sa2);
-  const latLngs = [[here.lat, here.lon], ...currentLinks.map((link) => {
+  const latLngs = [[here.lat, here.lon], ...currentLinks.slice(0, meta.top_n_links).map((link) => {
     const other = lookupByCode.get(link[0]);
     return [other.lat, other.lon];
   })];
   const bounds = L.latLngBounds(latLngs).extend(layerByCode.get(state.sa2).getBounds());
-  if (!map.getBounds().contains(bounds)) map.flyToBounds(bounds.pad(0.25), { maxZoom: 11, duration: 0.6 });
+  const view = map.getBounds();
+  const tooSmall = bounds.getNorth() - bounds.getSouth() < (view.getNorth() - view.getSouth()) / 10
+    && bounds.getEast() - bounds.getWest() < (view.getEast() - view.getWest()) / 10;
+  if (view.contains(bounds) && !tooSmall) return;
+  if (animate) map.flyToBounds(bounds.pad(0.25), { maxZoom: 11, duration: 0.6 });
+  else map.fitBounds(bounds.pad(0.25), { maxZoom: 11, animate: false });
 }
 
 // -- panel ----
@@ -238,8 +285,8 @@ function approximateInterval(rate, n) {
   return 1.96 * Math.sqrt((rate * (1 - rate)) / n);
 }
 
-function statBlock(label, value, note, primary = false) {
-  return `<div class="stat${primary ? ' primary' : ''}"><div class="stat-label">${label}</div><div class="stat-value">${value}</div>${note ? `<div class="stat-note">${note}</div>` : ''}</div>`;
+function statBlock(label, value, note) {
+  return `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div>${note ? `<div class="stat-note">${note}</div>` : ''}</div>`;
 }
 
 function renderIntro() {
@@ -270,52 +317,103 @@ function renderGroupBars() {
   return `<h3>${escapeHtml(measure.label)}, by group</h3><div class="bars">${html}</div>`;
 }
 
+// -- breakdown by scope ----
+// Which scope another SA2 is in, seen from the selected one. Mirrors
+// stage 03's scope column: same SA4, else same state, else other.
+function scopeOf(here, other) {
+  if (other.sa4_code === here.sa4_code) return 'same_sa4';
+  if (other.state === here.state) return 'same_state';
+  return 'other_state';
+}
+
+function scopeTitle(scope, here) {
+  if (scope === 'same_sa4') return `Elsewhere in ${escapeHtml(here.sa4)} <span class="tag">SA4</span>`;
+  if (scope === 'same_state') return `Elsewhere in ${escapeHtml(here.state)}`;
+  return 'Other states and territories';
+}
+
+// A bar on one scale for every row of the breakdown: full width is
+// 100% of the SA2's children, as in the Opportunity Insights design.
+function shareBar(share) {
+  const width = Math.max(0, Math.min(100, share * 100));
+  return `<span class="share-bar"><span style="width:${width}%"></span></span>`;
+}
+
+// A list row's bar, on the same scale as the scope bars above it:
+// those span the row less the 66 px share column and gap.
+function areaBar(share, extraClass = '') {
+  return `<span class="area-bar ${extraClass}" style="width:calc((100% - 66px) * ${Math.max(0, Math.min(1, share))})"></span>`;
+}
+
+function scopeList(scope, scopeShare, here) {
+  const links = currentLinks.filter((link) => scopeOf(here, lookupByCode.get(link[0])) === scope);
+  const shown = links.slice(0, meta.top_n_links);
+  const rows = shown.map((link) => {
+    const other = lookupByCode.get(link[0]);
+    const where = scope === 'other_state' ? `, ${STATE_ABBREVIATIONS[other.state] ?? escapeHtml(other.state)}` : '';
+    return `<li><button type="button" data-select="${other.code}" title="Select ${escapeHtml(other.name)}">${areaBar(link[2])}`
+      + `<span class="area-text">${escapeHtml(other.name)}${where} <span class="area-note">(${formatKm(link[3])} away · ${formatShare(link[2])})</span></span></button></li>`;
+  });
+  // The rest of the scope: places beyond the top few, and places
+  // with too few children to publish. Rounded shares can leave a
+  // hair either way, so anything under 0.05 pp is not shown.
+  const remainder = scopeShare - shown.reduce((total, link) => total + link[2], 0);
+  if (remainder >= 0.0005) {
+    const label = links.length > shown.length ? 'Other places' : `Places with fewer than ${meta.min_link_count} children each`;
+    rows.push(`<li class="area-other">${areaBar(remainder, 'muted-bar')}<span class="area-text">${label} <span class="area-note">(${formatShare(remainder)})</span></span></li>`);
+  }
+  if (!rows.length) return '';
+  const open = foldedScopes.has(scope) ? '' : ' open';
+  return `<details class="area-list" data-scope="${scope}"${open}><summary><span class="when-open">hide top areas</span><span class="when-closed">show top areas</span></summary><ol>${rows.join('')}</ol></details>`;
+}
+
+function renderBreakdown(row, here) {
+  const n = row[SUMMARY_POSITION.n];
+  const homeShare = row[SUMMARY_POSITION.same_sa2];
+  const interval = approximateInterval(homeShare, n);
+  const homeNote = state.dir === 'from' ? `still living here at ${meta.destination_age}` : 'also grew up here';
+  const home = `<section class="scope home"><h4>${escapeHtml(here.name)} <span class="tag">home</span></h4>`
+    + `<div class="scope-row">${shareBar(homeShare)}<strong>${formatShare(homeShare)}</strong></div>`
+    + `<p class="scope-note">${homeNote} · ± ${(interval * 100).toFixed(1)} pp, approx. 95% interval</p></section>`;
+  const moving = MOVING_SCOPES
+    .filter((scope) => scope !== 'same_state' || sa4CountByState.get(here.state) > 1)
+    .map((scope) => {
+      const share = row[SUMMARY_POSITION[scope]];
+      return `<section class="scope"><h4>${scopeTitle(scope, here)}</h4>`
+        + `<div class="scope-row">${shareBar(share)}<strong>${formatShare(share)}</strong></div>${scopeList(scope, share, here)}</section>`;
+    }).join('');
+  return `<div class="breakdown">${home}${moving}</div>`;
+}
+
 function renderSelection() {
   const place = lookupByCode.get(state.sa2);
   const row = summaryRow(state.sa2);
   const group = GROUP_BY_ID[state.group];
-  const header = `<div class="place-head"><div><h2>${escapeHtml(place.name)}</h2><p class="muted">${escapeHtml(place.sa3)} · ${escapeHtml(place.state)}</p></div>`
+  const header = `<div class="place-head"><div><h2>${escapeHtml(place.name)}</h2><p class="muted">${regionLine(place)}</p></div>`
     + '<button type="button" class="clear" data-clear aria-label="Clear selection">×</button></div>';
   const context = state.dir === 'from'
-    ? `Children who lived here at ${meta.origin_age}, and where they lived at ${meta.destination_age}. <strong>${escapeHtml(group.name)}</strong>.`
-    : `People living here at ${meta.destination_age}, and where they lived at ${meta.origin_age}. <strong>${escapeHtml(group.name)}</strong>.`;
+    ? `Where children who lived here at ${meta.origin_age} were living at ${meta.destination_age}. <strong>${escapeHtml(group.name)}</strong>.`
+    : `Where people living here at ${meta.destination_age} lived at ${meta.origin_age}. <strong>${escapeHtml(group.name)}</strong>.`;
+  const flipText = state.dir === 'from'
+    ? `Where did ${meta.destination_age}-year-olds in ${escapeHtml(place.name)} grow up? →`
+    : `Where did children from ${escapeHtml(place.name)} go? →`;
+  const flip = `<button type="button" class="flip" data-flip>${flipText}</button>`;
 
   if (!row) {
-    return `${header}<p class="context-line">${context}</p><p class="small muted">No children in the data for this SA2 and group.</p>`;
+    return `${header}<p class="context-line">${context}</p><p class="small muted">No children in the data for this SA2 and group.</p>${flip}`;
+  }
+  if (row[SUMMARY_POSITION.same_sa2] === null) {
+    return `${header}<p class="context-line">${context}</p><p class="small muted">Suppressed: fewer than ${meta.min_base_count} children in this SA2 and group.</p>${flip}${renderGroupBars()}`;
   }
 
-  const [n, rate, meanKm, medianKm] = row;
-  const rateLabel = state.dir === 'from' ? `Still living in this SA2 at ${meta.destination_age}` : `Grew up in another SA2`;
-  const interval = approximateInterval(rate, n);
-  const stats = '<div class="stats">'
-    + statBlock(rateLabel, rate === null ? '–' : formatShare(rate),
-      rate === null ? `Suppressed: fewer than ${meta.min_base_count} children` : `± ${(interval * 100).toFixed(1)} pp, approx. 95% interval`, true)
+  const [, , meanKm, medianKm] = row;
+  const distances = '<div class="stats">'
     + statBlock('Median distance moved', medianKm === null ? '–' : formatKm(medianKm), 'movers only')
     + statBlock('Mean distance moved', meanKm === null ? '–' : formatKm(meanKm), 'everyone, stayers at 0 km')
     + '</div>';
 
-  const listTitle = state.dir === 'from' ? `Top destinations at ${meta.destination_age}` : `Top places they grew up`;
-  const shareOf = state.dir === 'from' ? 'of children from here' : `of ${meta.destination_age}-year-olds here`;
-  let list;
-  if (currentLinks.length) {
-    list = '<ol class="links">' + currentLinks.map((link, index) => {
-      const other = lookupByCode.get(link[0]);
-      return `<li><button type="button" data-select="${other.code}" title="Select ${escapeHtml(other.name)}">`
-        + `<span class="rank" style="background:${LINK_COLOURS[index]}">${index + 1}</span>`
-        + `<span class="link-name">${escapeHtml(other.name)}<small>${escapeHtml(other.sa3)} · ${escapeHtml(other.state)}</small></span>`
-        + `<span class="link-share">${formatShare(link[2])}</span><span class="link-km">${formatKm(link[3])}</span></button></li>`;
-    }).join('') + '</ol>'
-      + `<p class="small muted">Shares are ${shareOf}.${currentLinks.length < meta.top_n_links ? ` Places with fewer than ${meta.min_link_count} children are not shown, so the list stops at ${currentLinks.length}.` : ''}</p>`;
-  } else {
-    list = `<p class="small muted">No single place had ${meta.min_link_count} or more children, so none is shown.</p>`;
-  }
-
-  const flipText = state.dir === 'from'
-    ? `Where did ${meta.destination_age}-year-olds in ${escapeHtml(place.name)} grow up? →`
-    : `Where did children from ${escapeHtml(place.name)} go? →`;
-
-  return `${header}<p class="context-line">${context}</p>${stats}<h3>${listTitle}</h3>${list}`
-    + `<button type="button" class="flip" data-flip>${flipText}</button>${renderGroupBars()}`;
+  return `${header}<p class="context-line">${context}</p>${renderBreakdown(row, place)}${distances}`
+    + `${flip}${renderGroupBars()}`;
 }
 
 function renderDetails() {
@@ -352,10 +450,9 @@ async function update({ fit = false } = {}) {
   } else {
     currentLinks = [];
   }
-  linkRankByCode = new Map(currentLinks.map((link, index) => [link[0], index + 1]));
+  linkByCode = new Map(currentLinks.map((link) => [link[0], link]));
   computeBreaks();
   restyleMap();
-  drawLinks();
   renderLegend();
   renderControls();
   renderDetails();
@@ -378,9 +475,10 @@ function renderAbout() {
     <dt>Places</dt><dd>${numberFormat.format(meta.n_sa2)} Statistical Areas Level 2, ASGS 2016 edition, used at both ages.</dd>
     <dt>Groups</dt><dd>Parental-income quartile and sex are separate splits; they are never combined.</dd>
     <dt>Rates</dt><dd>“Still in their SA2” is the share of an SA2's children living in the same SA2 at ${meta.destination_age}. “Grew up elsewhere” is the share of an SA2's ${meta.destination_age}-year-olds who lived in a different SA2 at ${meta.origin_age}.</dd>
+    <dt>Breakdown</dt><dd>Everyone from (or in) an SA2 falls in exactly one of four parts: the same SA2; another SA2 in the same SA4; another SA4 in the same state or territory; another state or territory. The top ${meta.top_n_links} places are named in each part, and the rest of the part is shown as one line.</dd>
     <dt>Distance</dt><dd>Straight-line km between SA2 reference points (a point inside each SA2). The mean counts stayers at 0 km; the median is over movers only.</dd>
-    <dt>Privacy</dt><dd>A rate needs at least ${meta.min_base_count} children; a destination or origin is listed only if at least ${meta.min_link_count} children made that move. Counts are rounded to the nearest ${meta.count_rounding_base}.</dd>
-    <dt>Download</dt><dd><a href="data/sa2_summary.csv" download>SA2 summary</a> · <a href="data/sa2_top_links.csv" download>Top links</a> · <a href="data/sa2_reference_points.csv" download>SA2 reference points</a></dd>
+    <dt>Privacy</dt><dd>A rate needs at least ${meta.min_base_count} children; a place is shaded or named only if at least ${meta.min_link_count} children made that move. Counts are rounded to the nearest ${meta.count_rounding_base}.</dd>
+    <dt>Download</dt><dd><a href="data/sa2_summary.csv" download>SA2 summary</a> · <a href="data/sa2_links.csv" download>SA2 links</a> · <a href="data/sa2_reference_points.csv" download>SA2 reference points</a></dd>
     <dt>Credits</dt><dd>Boundaries: ABS, ASGS 2016 (CC BY 4.0). Design follows <a href="https://migrationpatterns.org/" rel="noopener">migrationpatterns.org</a> (Sprung-Keyser, Hendren and Porter).</dd>
     <dt>Built</dt><dd>${escapeHtml(meta.built)}</dd></dl>`;
 }
@@ -411,6 +509,13 @@ function wireControls() {
     else if ('flip' in target.dataset) { state.dir = state.dir === 'from' ? 'to' : 'from'; update({ fit: true }); }
     else if (target.dataset.groupPick) { state.group = target.dataset.groupPick; update(); }
   });
+  // Remember which breakdown lists were folded, so the next SA2
+  // opens the same way. "toggle" does not bubble, hence capture.
+  document.getElementById('details').addEventListener('toggle', (event) => {
+    const scope = event.target.dataset?.scope;
+    if (!scope) return;
+    if (event.target.open) foldedScopes.delete(scope); else foldedScopes.add(scope);
+  }, true);
 
   const search = document.getElementById('search');
   const codeByLabel = new Map();
@@ -471,7 +576,6 @@ function buildMap(boundaries, stateOutlines) {
       icon: L.divIcon({ className: 'city-label', html: `<span>${name}</span>`, iconSize: null }),
     }).addTo(map);
   });
-  linkOverlay = L.layerGroup().addTo(map);
   map.on('click', () => { if (state.sa2) { state.sa2 = null; update(); } });
 
   legendControl = L.control({ position: 'bottomright' });
@@ -494,6 +598,12 @@ async function start() {
     meta = metaData;
     summary = summaryData;
     lookupByCode = new Map(lookup.map((place) => [place.code, place]));
+    const sa4sByState = new Map();
+    lookup.forEach((place) => {
+      if (!sa4sByState.has(place.state)) sa4sByState.set(place.state, new Set());
+      sa4sByState.get(place.state).add(place.sa4_code);
+    });
+    sa4sByState.forEach((sa4s, stateName) => sa4CountByState.set(stateName, sa4s.size));
     document.getElementById('dummy-banner').hidden = !meta.is_dummy_data;
     document.getElementById('lede').textContent = `Where children who lived in each SA2 at ${meta.origin_age} were living at ${meta.destination_age}, and where each SA2's ${meta.destination_age}-year-olds grew up. Australians born ${meta.birth_year_min}–${meta.birth_year_max}.`;
     // State and shading breaks first: the layer is styled as it is
@@ -507,8 +617,11 @@ async function start() {
     status.hidden = true;
     // The container can change size while data load (fonts, the
     // banner), so re-measure and fit once everything is in place.
+    // A linked SA2 is framed again here, without animation: a flight
+    // started before the re-measure is cut short by it.
     map.invalidateSize({ animate: false });
-    if (!state.sa2) map.fitBounds(AUSTRALIA_BOUNDS, { animate: false });
+    if (state.sa2) fitSelection({ animate: false });
+    else map.fitBounds(AUSTRALIA_BOUNDS, { animate: false });
 
     // Leaflet re-measures only on window resize. When the container
     // changes size on its own (the phone layout settling, a page
