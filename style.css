@@ -114,7 +114,7 @@ select, input[type="search"] {
 .scope-note { margin: 3px 0 0; font-size: 0.78rem; color: var(--muted); }
 .share-bar { display: block; height: 16px; background: var(--page); border-radius: 2px; overflow: hidden; }
 .share-bar > span { display: block; height: 100%; background: var(--accent); }
-.scope.home .share-bar > span { background: #d94801; }
+.scope.home .share-bar > span { background: #084594; }
 
 /* a list row: bar on the scope bars' scale, the text straight after */
 .area-list summary { cursor: pointer; font-size: 0.82rem; font-style: italic; color: var(--ink-soft); margin-top: 4px; }

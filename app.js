@@ -52,17 +52,20 @@ const MEASURES = {
   ],
 };
 
-// Sequential blues for SA2 statistics (ColorBrewer Blues, 7 classes)
-// and oranges for a selected SA2's links (ColorBrewer Oranges), so
-// the two modes cannot be mistaken for each other; both are
-// single-hue and read under the common colour-vision deficiencies.
+// Sequential blues (ColorBrewer Blues, 7 classes) for both modes: an
+// SA2's own statistic, and a selected SA2's links. One hue reads
+// under the common colour-vision deficiencies; the legend title says
+// which mode is showing. (Oranges for the links were tried on
+// 2026-11-25 and dropped at the user's request.)
 const PALETTE = ['#eff3ff', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#084594'];
 const NO_DATA_COLOUR = '#d9dce1';
-const FLOW_PALETTE = ['#feedde', '#fdd0a2', '#fdae6b', '#fd8d3c', '#f16913', '#d94801', '#8c2d04'];
+const FLOW_PALETTE = PALETTE;
 // Fixed, doubling breaks for link shares, so one SA2's map can be
 // compared with another's; quantiles would rescale every click.
 const FLOW_BREAKS = [0.005, 0.01, 0.02, 0.04, 0.08, 0.16];
-const NO_LINK_COLOUR = '#eceef2';
+// The suppressed grey, not a near-white: the lightest blue is
+// #eff3ff and must stay distinct from "no published link".
+const NO_LINK_COLOUR = NO_DATA_COLOUR;
 const SELECTED_OUTLINE = '#1b2230';
 
 // SA2s offered as starting points, if they exist in the lookup.
