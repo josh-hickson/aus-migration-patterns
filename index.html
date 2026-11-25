@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Where Young Australians Move</title>
+  <meta name="description" content="Where Australian children who lived in each SA2 at 16 were living at 26, and where each SA2's 26-year-olds grew up, by parental income and sex.">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <h1>Where young Australians move</h1>
+    <p class="lede" id="lede">Where children who lived in each SA2 at 16 were living at 26.</p>
+  </header>
+
+  <div id="dummy-banner" class="dummy-banner" hidden>
+    <strong>Dummy data.</strong> Every number on this page is simulated to test the site. None describes a real place.
+  </div>
+
+  <main class="layout">
+    <aside class="panel">
+      <section class="controls" aria-label="Map options">
+        <div class="control">
+          <span class="control-label" id="direction-label">Looking</span>
+          <div class="segmented" role="group" aria-labelledby="direction-label" id="direction-control">
+            <button type="button" data-dir="from">Where did they go?</button>
+            <button type="button" data-dir="to">Where did they come from?</button>
+          </div>
+        </div>
+
+        <div class="control">
+          <span class="control-label" id="group-label">Group</span>
+          <div class="group-rows" role="group" aria-labelledby="group-label" id="group-control">
+            <div class="group-row">
+              <button type="button" data-group="all">All</button>
+            </div>
+            <div class="group-row">
+              <span class="group-row-label">Parental income</span>
+              <button type="button" data-group="q1" title="Bottom quartile">Q1</button>
+              <button type="button" data-group="q2">Q2</button>
+              <button type="button" data-group="q3">Q3</button>
+              <button type="button" data-group="q4" title="Top quartile">Q4</button>
+            </div>
+            <div class="group-row">
+              <span class="group-row-label">Sex</span>
+              <button type="button" data-group="female">Women</button>
+              <button type="button" data-group="male">Men</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="control">
+          <label class="control-label" for="measure-control">Shade the map by</label>
+          <select id="measure-control"></select>
+        </div>
+
+        <div class="control">
+          <label class="control-label" for="search">Find an SA2</label>
+          <input id="search" type="search" list="sa2-names" placeholder="Type a place name" autocomplete="off">
+          <datalist id="sa2-names"></datalist>
+        </div>
+      </section>
+
+      <section id="details" class="details" aria-live="polite"></section>
+
+      <details class="about" id="about">
+        <summary>About these data</summary>
+        <div id="about-body"></div>
+      </details>
+    </aside>
+
+    <div class="map-wrap">
+      <div id="map" class="map" role="application" aria-label="Map of Australian SA2s"></div>
+      <div id="map-status" class="map-status">Loading map…</div>
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
