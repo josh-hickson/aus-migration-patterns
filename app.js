@@ -265,6 +265,12 @@ function renderSelectionLegend(group) {
 // height -- at national scale a city SA2 and its neighbours are
 // specks, and their shading cannot be seen.
 function fitSelection({ animate = true } = {}) {
+  // A map with no size yet (a background tab, a layout still
+  // settling) cannot be fitted: Leaflet throws on the NaN bounds and
+  // the rest of start-up never runs. The resize observer fits it
+  // once it has a size.
+  const size = map.getSize();
+  if (!size.x || !size.y) return;
   const here = lookupByCode.get(state.sa2);
   const latLngs = [[here.lat, here.lon], ...currentLinks.slice(0, meta.top_n_links).map((link) => {
     const other = lookupByCode.get(link[0]);
@@ -625,14 +631,17 @@ async function start() {
 
     // Leaflet re-measures only on window resize. When the container
     // changes size on its own (the phone layout settling, a page
-    // opened in a background tab), re-measure, and keep Australia
-    // framed until the visitor first touches the map.
+    // opened in a background tab), re-measure, and keep Australia --
+    // or a linked SA2 -- framed until the visitor first touches the
+    // map.
     let visitorHasMoved = false;
     const mapElement = document.getElementById('map');
     ['pointerdown', 'wheel', 'keydown'].forEach((type) => mapElement.addEventListener(type, () => { visitorHasMoved = true; }, { once: true, passive: true }));
     new ResizeObserver(() => {
       map.invalidateSize({ animate: false });
-      if (!visitorHasMoved && !state.sa2) map.fitBounds(AUSTRALIA_BOUNDS, { animate: false });
+      if (visitorHasMoved) return;
+      if (state.sa2) fitSelection({ animate: false });
+      else map.fitBounds(AUSTRALIA_BOUNDS, { animate: false });
     }).observe(mapElement);
   } catch (error) {
     status.textContent = location.protocol === 'file:'
